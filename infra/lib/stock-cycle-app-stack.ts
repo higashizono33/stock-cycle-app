@@ -17,7 +17,9 @@ export interface StockCycleAppStackProps extends cdk.StackProps {
   /** Bedrockでの商品名正規化に使うモデルID(要件定義書7章「低コストなNova Microに固定」) */
   bedrockModelId?: string;
   /** レシート画像のOCR+構造化抽出に使うvision対応モデルID。Textractは日本語レシートに
-   * 対応していないため、こちらのマルチモーダルモデルを使う(2026-08-16変更) */
+   * 対応していないため、こちらのマルチモーダルモデルを使う(2026-08-16変更)。
+   * 既定はClaude Haiku 4.5(実機検証でNova Liteより日本語レシートの読み取り精度が
+   * 高かったため2026-08-16に変更) */
   bedrockVisionModelId?: string;
 }
 
@@ -29,11 +31,14 @@ export class StockCycleAppStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: StockCycleAppStackProps) {
     super(scope, id, props);
 
-    // 2026-08-16: us-east-2はNova系モデルの直接提供リージョンではなく、クロスリージョン
-    // 推論プロファイル("us."プレフィックス)経由でのみ呼び出せる。そのためモデルIDは
-    // プロファイルID形式にする(ApiConstruct側のIAMポリシーも合わせて対応済み)。
+    // 2026-08-16: us-east-2はNova/Claude系モデルの直接提供リージョンではなく、クロス
+    // リージョン推論プロファイル("us."プレフィックス)経由でのみ呼び出せる。そのため
+    // モデルIDはプロファイルID形式にする(ApiConstruct側のIAMポリシーも合わせて対応済み)。
     const bedrockModelId = props.bedrockModelId ?? 'us.amazon.nova-micro-v1:0';
-    const bedrockVisionModelId = props.bedrockVisionModelId ?? 'us.amazon.nova-lite-v1:0';
+    // vision(レシートOCR)はNova Liteで実機検証したところ、回転・ブレた実物の日本語
+    // レシート写真で店舗名・日付・明細のすべてが実在しない内容に化ける事例が発生したため、
+    // より読み取り精度の高いClaude Haiku 4.5に変更した。
+    const bedrockVisionModelId = props.bedrockVisionModelId ?? 'us.anthropic.claude-haiku-4-5-20251001-v1:0';
 
     const storage = new StorageConstruct(this, 'Storage');
     const dashboardUrl = `https://${storage.dashboardDistribution.distributionDomainName}`;

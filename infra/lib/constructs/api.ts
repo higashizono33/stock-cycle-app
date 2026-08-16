@@ -77,7 +77,7 @@ export class ApiConstruct extends Construct {
 
     const scanReceiptFn = fn('scan-receipt', { timeout: Duration.seconds(60), memorySize: 512 });
     storage.receiptsBucket.grantRead(scanReceiptFn);
-    // us-east-2はNova系モデルの直接提供リージョンではなく、クロスリージョン推論プロファイル
+    // us-east-2はNova/Claude系モデルの直接提供リージョンではなく、クロスリージョン推論プロファイル
     // ("us."プレフィックスのモデルID)経由でしか呼べない(2026-08-16判明)。そのため
     // InvokeModelの許可は (1) このリージョンの推論プロファイルARN と
     // (2) プロファイルが実際にルーティングし得る先の各リージョンのfoundation-model ARN

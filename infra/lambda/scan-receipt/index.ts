@@ -8,10 +8,13 @@ const s3 = new S3Client({});
 const bedrock = new BedrockRuntimeClient({});
 
 const RECEIPTS_BUCKET_NAME = process.env.RECEIPTS_BUCKET_NAME!;
-// us-east-2はNova系モデルの直接提供リージョンではないため、クロスリージョン推論
+// us-east-2はNova/Claude系モデルの直接提供リージョンではないため、クロスリージョン推論
 // プロファイル("us."プレフィックス)のモデルIDを使う(infra/lib/stock-cycle-app-stack.ts参照)。
 const BEDROCK_MODEL_ID = process.env.BEDROCK_MODEL_ID ?? 'us.amazon.nova-micro-v1:0';
-const BEDROCK_VISION_MODEL_ID = process.env.BEDROCK_VISION_MODEL_ID ?? 'us.amazon.nova-lite-v1:0';
+// 2026-08-16実機検証: Nova Liteでは実物の(回転・ブレた)日本語レシート写真の読み取り精度が
+// 低く、店舗名・日付・明細すべてが実在しない内容にすり替わる(ハルシネーション)事例が発生した。
+// vision OCRの精度を優先し、Claude Haiku 4.5に切り替えた(要件定義書10章 変更履歴参照)。
+const BEDROCK_VISION_MODEL_ID = process.env.BEDROCK_VISION_MODEL_ID ?? 'us.anthropic.claude-haiku-4-5-20251001-v1:0';
 
 interface RequestBody {
   key?: string;
@@ -38,14 +41,6 @@ function imageFormatFromKey(key: string): ImageFormat {
 }
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-// Catches the Bedrock vision model getting stuck looping the same phrase — a
-// known failure mode on some receipt photos — before we even try to parse
-// it as JSON. A chunk of 6+ characters repeated 4+ times back-to-back is
-// something normal receipt/JSON text never does.
-function hasDegenerateRepetition(text: string): boolean {
-  return /(.{6,80})\1{3,}/.test(text);
-}
 
 /**
  * requirements.md §3.2手順2: レシート画像から店舗名・購入日・明細(商品名・数量)を
@@ -90,23 +85,11 @@ async function extractReceiptFromImage(key: string): Promise<{ store: string; da
             content: [{ image: { format: imageFormatFromKey(key), source: { bytes } } }, { text: prompt }],
           },
         ],
-        // temperature: 0 (greedy decoding) turned out to make this model prone to getting
-        // stuck repeating the same word/phrase forever on some receipt photos, running past
-        // maxTokens mid-string and producing invalid JSON. A little randomness breaks the loop.
-        inferenceConfig: { maxTokens: 2048, temperature: 0.2, topP: 0.9 },
+        inferenceConfig: { maxTokens: 2048, temperature: 0 },
       }),
     );
     const text = res.output?.message?.content?.find((c) => c.text)?.text ?? '';
     const jsonText = text.trim().replace(/^```(json)?/i, '').replace(/```$/, '').trim();
-
-    if (hasDegenerateRepetition(jsonText)) {
-      console.error('scan-receipt: model output looks like a repetition loop, discarding', {
-        key,
-        modelId: BEDROCK_VISION_MODEL_ID,
-        rawTextPreview: text.slice(0, 500),
-      });
-      return fallback;
-    }
 
     let parsed: { store?: string; date?: string; items?: RawLineItem[] };
     try {
@@ -133,6 +116,17 @@ async function extractReceiptFromImage(key: string): Promise<{ store: string; da
     if (items.length === 0) {
       // 例外は起きていないが、モデルが「読めなかった」と判断したケース。原因切り分け用にログを残す。
       console.warn('scan-receipt: Bedrock vision returned zero items', { key, modelId: BEDROCK_VISION_MODEL_ID, rawTextPreview: text.slice(0, 500) });
+    } else {
+      // 正常系でも抽出結果をログに残す。店舗名・日付・明細が実物と食い違う(誤読/ハルシネーション)
+      // 場合に、後からCloudWatch Logsだけで気づけるようにするため。
+      console.log('scan-receipt: Bedrock vision extraction succeeded', {
+        key,
+        modelId: BEDROCK_VISION_MODEL_ID,
+        store: parsed.store,
+        date: parsed.date,
+        itemCount: items.length,
+        items: items.map((it) => `${it.description} x${it.quantity}`),
+      });
     }
 
     return {
@@ -168,7 +162,7 @@ async function normalizeItems(items: RawLineItem[]): Promise<ScannedRow[]> {
     'The input lines may be in Japanese, English, or another language.',
     'Rules:',
     '- Always respond with the product name in English, regardless of the input language.',
-    '- Use the general product type as the name, not the brand (e.g. "Charmin Ultra Soft 12pk" -> "Toilet Paper", "アリエール 詰め替え用" -> "Laundry Detergent", "コカコーラ 500ml" -> "Coca-Cola").',
+    '- Use the general product type as the name, not the brand (e.g. "Charmin Ultra Soft 12pk" -> "Toilet Paper", "アリエール 詰め替え用" -> "Laundry Detergent", "コーラ 500ml" -> "Soda"). Do not invent or default to a specific example brand/product from these instructions — base the name only on the actual input line given below.',
     '- category must be exactly one of: "Household", "Food", "Other".',
     '- Respond with ONLY a JSON array, no prose, no markdown fences.',
     '- The array must have exactly one object per input line, in the same order: {"name": string, "category": string}',
@@ -188,7 +182,7 @@ async function normalizeItems(items: RawLineItem[]): Promise<ScannedRow[]> {
     const text = res.output?.message?.content?.find((c) => c.text)?.text ?? '';
     const jsonText = text.trim().replace(/^```(json)?/i, '').replace(/```$/, '').trim();
     const parsed = JSON.parse(jsonText) as Array<{ name: string; category: Category }>;
-    if (parsed.length !== items.length) throw new Error('length mismatch');
+    if (parsed.length !== items.length) throw new Error(`length mismatch: got ${parsed.length}, expected ${items.length}`);
 
     return parsed.map((normalized, i) => ({
       checked: true,
@@ -198,9 +192,15 @@ async function normalizeItems(items: RawLineItem[]): Promise<ScannedRow[]> {
         : 'Other',
       qty: items[i].quantity,
     }));
-  } catch {
+  } catch (err) {
     // Bedrock unavailable or returned something unparseable — fall back to the raw
-    // OCR text untouched rather than failing the whole scan.
+    // OCR text untouched rather than failing the whole scan. Logged so a bad
+    // normalization (e.g. every item collapsing to the same name) can be traced later.
+    console.error('scan-receipt: normalizeItems failed, falling back to raw OCR text', {
+      modelId: BEDROCK_MODEL_ID,
+      inputItems: items.map((it) => it.description),
+      err,
+    });
     return items.map((it) => ({ checked: true, name: it.description, category: 'Other', qty: it.quantity }));
   }
 }

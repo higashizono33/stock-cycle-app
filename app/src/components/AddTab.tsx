@@ -12,14 +12,22 @@ export default function AddTab({ onDone, showToast }: { onDone: () => void; show
   const [scannedFrom, setScannedFrom] = useState<{ store: string; date: string } | null>(null);
   const [rows, setRows] = useState<ScannedRow[]>([]);
   const [extractionFailed, setExtractionFailed] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  // カメラ起動用とギャラリー選択用でinputを分ける。同じinputに`capture`属性を付けたまま
+  // 共用すると、ギャラリーから選びたい場合でもブラウザ/OSがカメラを直接起動してしまう
+  // (「Choose from Gallery」を押してもカメラが開くバグ、2026-08-16報告・修正)。
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const galleryInputRef = useRef<HTMLInputElement>(null);
 
   const [manualName, setManualName] = useState('');
   const [manualCategory, setManualCategory] = useState<Category>('Household');
   const [manualDate, setManualDate] = useState(todayISO());
 
-  function pickPhoto() {
-    fileInputRef.current?.click();
+  function pickFromCamera() {
+    cameraInputRef.current?.click();
+  }
+
+  function pickFromGallery() {
+    galleryInputRef.current?.click();
   }
 
   async function onPhotoSelected(file: File | null) {
@@ -93,10 +101,17 @@ export default function AddTab({ onDone, showToast }: { onDone: () => void; show
   return (
     <div>
       <input
-        ref={fileInputRef}
+        ref={cameraInputRef}
         type="file"
         accept="image/*"
         capture="environment"
+        style={{ display: 'none' }}
+        onChange={(e) => onPhotoSelected(e.target.files?.[0] ?? null)}
+      />
+      <input
+        ref={galleryInputRef}
+        type="file"
+        accept="image/*"
         style={{ display: 'none' }}
         onChange={(e) => onPhotoSelected(e.target.files?.[0] ?? null)}
       />
@@ -104,14 +119,14 @@ export default function AddTab({ onDone, showToast }: { onDone: () => void; show
       {step === 'choose' && (
         <>
           <p className="hint-text">Upload a receipt and we'll read the items automatically and update your stock levels.</p>
-          <button className="choice-btn" onClick={pickPhoto}>
+          <button className="choice-btn" onClick={pickFromCamera}>
             <div className="ic">📷</div>
             <div>
               Take a Photo
               <span className="sub">Snap a receipt right now</span>
             </div>
           </button>
-          <button className="choice-btn" onClick={pickPhoto}>
+          <button className="choice-btn" onClick={pickFromGallery}>
             <div className="ic">🖼️</div>
             <div>
               Choose from Gallery
