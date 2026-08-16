@@ -18,10 +18,9 @@ export interface StockCycleAppStackProps extends cdk.StackProps {
   bedrockModelId?: string;
   /** レシート画像のOCR+構造化抽出に使うvision対応モデルID。Textractは日本語レシートに
    * 対応していないため、こちらのマルチモーダルモデルを使う(2026-08-16変更)。
-   * Claude(Haiku 4.5 / Sonnet 4.5)への切り替えを試みたが、このAWSアカウントは
-   * どちらも"Model use case details have not been submitted for this account"
-   * (Anthropicモデル利用の申請フォーム未提出)で呼び出せなかったため断念し、
-   * Amazon自社モデルの中で最上位のNova Proを既定にした(2026-08-16)。 */
+   * 当初はAnthropicモデル利用の申請フォーム未提出でClaudeを呼び出せず、Amazon自社
+   * モデルの中で最上位のNova Proを暫定採用していたが、フォーム提出・承認後は
+   * 精度の高いClaude Sonnet 4.5に切り替えた(2026-08-16)。 */
   bedrockVisionModelId?: string;
 }
 
@@ -38,12 +37,10 @@ export class StockCycleAppStack extends cdk.Stack {
     // モデルIDはプロファイルID形式にする(ApiConstruct側のIAMポリシーも合わせて対応済み)。
     const bedrockModelId = props.bedrockModelId ?? 'us.amazon.nova-micro-v1:0';
     // vision(レシートOCR)はNova Liteで実機検証したところ、回転・ブレた実物の日本語
-    // レシート写真で店舗名・日付・明細のすべてが実在しない内容に化ける事例が発生したため、
-    // Claude(Haiku 4.5 / Sonnet 4.5)への切り替えを試みたが、このAWSアカウントは
-    // どちらも"Model use case details have not been submitted for this account"
-    // (Anthropicモデル利用の申請フォーム未提出)で呼び出せなかったため断念し、
-    // Amazon自社モデルの中で最上位のNova Proを使う。
-    const bedrockVisionModelId = props.bedrockVisionModelId ?? 'us.amazon.nova-pro-v1:0';
+    // レシート写真で店舗名・日付・明細のすべてが実在しない内容に化ける事例が発生した。
+    // 当初はAnthropicモデル利用の申請フォーム未提出でClaudeを呼び出せずNova Proを
+    // 暫定採用していたが、フォーム提出・承認後はClaude Sonnet 4.5に切り替えた。
+    const bedrockVisionModelId = props.bedrockVisionModelId ?? 'us.anthropic.claude-sonnet-4-5-20250929-v1:0';
 
     const storage = new StorageConstruct(this, 'Storage');
     const dashboardUrl = `https://${storage.dashboardDistribution.distributionDomainName}`;

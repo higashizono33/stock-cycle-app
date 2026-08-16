@@ -13,11 +13,9 @@ const RECEIPTS_BUCKET_NAME = process.env.RECEIPTS_BUCKET_NAME!;
 const BEDROCK_MODEL_ID = process.env.BEDROCK_MODEL_ID ?? 'us.amazon.nova-micro-v1:0';
 // 2026-08-16実機検証: Nova Liteでは実物の(回転・ブレた)日本語レシート写真の読み取り精度が
 // 低く、店舗名・日付・明細すべてが実在しない内容にすり替わる(ハルシネーション)事例が発生した。
-// Claude(Haiku 4.5 / Sonnet 4.5)への切り替えを試みたが、このAWSアカウントでは
-// どちらも"Model use case details have not been submitted for this account"
-// (Anthropicモデル利用のための申請フォーム未提出。要AWS Sales/コンソール対応)で
-// 呼び出せなかったため、Amazon自社モデルの中で最上位のNova Proに変更した。
-const BEDROCK_VISION_MODEL_ID = process.env.BEDROCK_VISION_MODEL_ID ?? 'us.amazon.nova-pro-v1:0';
+// 当初はAnthropicモデル利用の申請フォーム未提出でClaudeを呼び出せなかったため一時的に
+// Nova Proへ変更していたが、フォーム提出・承認後はClaude Sonnet 4.5に切り替えた。
+const BEDROCK_VISION_MODEL_ID = process.env.BEDROCK_VISION_MODEL_ID ?? 'us.anthropic.claude-sonnet-4-5-20250929-v1:0';
 
 interface RequestBody {
   key?: string;
