@@ -13,8 +13,9 @@ const RECEIPTS_BUCKET_NAME = process.env.RECEIPTS_BUCKET_NAME!;
 const BEDROCK_MODEL_ID = process.env.BEDROCK_MODEL_ID ?? 'us.amazon.nova-micro-v1:0';
 // 2026-08-16実機検証: Nova Liteでは実物の(回転・ブレた)日本語レシート写真の読み取り精度が
 // 低く、店舗名・日付・明細すべてが実在しない内容にすり替わる(ハルシネーション)事例が発生した。
-// vision OCRの精度を優先し、Claude Haiku 4.5に切り替えた(要件定義書10章 変更履歴参照)。
-const BEDROCK_VISION_MODEL_ID = process.env.BEDROCK_VISION_MODEL_ID ?? 'us.anthropic.claude-haiku-4-5-20251001-v1:0';
+// vision OCRの精度を優先しClaudeに切り替え。Haiku 4.5はこのAWSアカウントで
+// "not available for this account" のため使えず、Sonnet 4.5を使う(要件定義書10章 変更履歴参照)。
+const BEDROCK_VISION_MODEL_ID = process.env.BEDROCK_VISION_MODEL_ID ?? 'us.anthropic.claude-sonnet-4-5-20250929-v1:0';
 
 interface RequestBody {
   key?: string;
@@ -66,13 +67,19 @@ async function extractReceiptFromImage(key: string): Promise<{ store: string; da
     'You are reading a photo of a household shopping receipt (a long thermal-paper strip, photographed with a phone). The receipt may be written in Japanese, English, or another language — read it in whatever language it is written in.',
     'The photo may be rotated (sideways or upside-down), taken at an angle, slightly blurry, or have uneven lighting. Do your best to read it anyway — mentally rotate/straighten the text as needed. Long Japanese receipts are very often photographed sideways because the receipt itself is a tall narrow strip; this is normal and not a reason to give up.',
     'Extract the store name, the purchase date, and every real product line item (name and quantity).',
+    'How to read the item list (do this carefully, step by step):',
+    '- Scan the item section systematically from top to bottom, one printed line at a time. Do not skip around or guess from a partial glance.',
+    '- Each real item is a distinct printed line that has BOTH a product name AND its own price on the same line (Japanese receipts often prefix each item line with "*" or "＊", with the price right-aligned). If you cannot find a matching printed price for a name, do not include it.',
+    '- Many Japanese receipts print a purchase count near the bottom, such as "お買上点数15点" or "点数：15点" (meaning "15 items purchased"). If you see this, count how many item lines you actually found and make sure the count matches. If your count is short, go back and look again for lines you may have missed near the top, bottom, or a rotated/cut-off edge of the photo. If your count is over, you likely mis-split one item into two or accidentally included a non-item line — merge or remove the extra one.',
+    '- Report the printed purchase-count number (if visible) as "printedItemCount" so it can be double-checked later; use null if the receipt does not show one.',
     'Rules:',
     '- Normalize the date to ISO format YYYY-MM-DD. Japanese receipts often show dates as 令和6年3月10日 (Reiwa era; Reiwa 1 = 2019) or 2024/03/10 or 2024年3月10日 — convert these correctly to 2024-03-10 style.',
     '- Keep each item\'s description exactly as printed, in its original language (do not translate here — a later step handles that). Japanese receipts often print item names in half-width katakana (ｶﾀｶﾅ) — transcribe them as best you can even if partially garbled by the printer.',
-    '- Do NOT include subtotal, tax, total, change, payment method, points, or discount lines as items — only actual purchased products.',
-    '- Extract every item you can read, even if you are not 100% sure of a name or quantity — a human reviews and corrects this before it is saved, so a partial or approximate read is much more useful than giving up. Only return an empty items array if the image is genuinely unreadable (e.g. solid black/blank, or no receipt visible at all).',
+    '- Do NOT include subtotal, tax, total, change, payment method, points, discount, coupon, or purchase-count lines as items — only actual purchased products with their own price.',
+    '- NEVER invent, guess, or pad the list with a plausible-sounding item (e.g. a generic "Toothbrush" or "Snack") just because it seems like something a store like this might sell, or to round out the count. Every item you output must correspond to text you can actually see printed on the receipt. If you are unsure whether a line is a real separate item, it is better to leave it out than to invent one.',
+    '- That said, do extract every item you can genuinely read, even if you are not 100% sure of the exact spelling of a name — a human reviews and corrects this before it is saved, so an approximate but real reading is fine. Only return an empty items array if the image is genuinely unreadable (e.g. solid black/blank, or no receipt visible at all).',
     '- Respond with ONLY a JSON object, no prose, no markdown code fences, in exactly this shape:',
-    '{"store": string, "date": "YYYY-MM-DD", "items": [{"description": string, "quantity": number}]}',
+    '{"store": string, "date": "YYYY-MM-DD", "printedItemCount": number | null, "items": [{"description": string, "quantity": number}]}',
   ].join('\n');
 
   try {
@@ -85,15 +92,16 @@ async function extractReceiptFromImage(key: string): Promise<{ store: string; da
             content: [{ image: { format: imageFormatFromKey(key), source: { bytes } } }, { text: prompt }],
           },
         ],
-        inferenceConfig: { maxTokens: 2048, temperature: 0 },
+        // 15点超の長いレシートでも明細が最後まで出力し切れるよう、2048から引き上げ。
+        inferenceConfig: { maxTokens: 3072, temperature: 0 },
       }),
     );
     const text = res.output?.message?.content?.find((c) => c.text)?.text ?? '';
     const jsonText = text.trim().replace(/^```(json)?/i, '').replace(/```$/, '').trim();
 
-    let parsed: { store?: string; date?: string; items?: RawLineItem[] };
+    let parsed: { store?: string; date?: string; printedItemCount?: number | null; items?: RawLineItem[] };
     try {
-      parsed = JSON.parse(jsonText) as { store?: string; date?: string; items?: RawLineItem[] };
+      parsed = JSON.parse(jsonText) as { store?: string; date?: string; printedItemCount?: number | null; items?: RawLineItem[] };
     } catch (parseErr) {
       // モデルの生レスポンスをログに残す。JSONで返らない原因(プロンプト崩れ・途中で
       // 切れた等)を後から追えるようにするため、失敗を握りつぶさない。
@@ -118,12 +126,22 @@ async function extractReceiptFromImage(key: string): Promise<{ store: string; da
       console.warn('scan-receipt: Bedrock vision returned zero items', { key, modelId: BEDROCK_VISION_MODEL_ID, rawTextPreview: text.slice(0, 500) });
     } else {
       // 正常系でも抽出結果をログに残す。店舗名・日付・明細が実物と食い違う(誤読/ハルシネーション)
-      // 場合に、後からCloudWatch Logsだけで気づけるようにするため。
+      // 場合に、後からCloudWatch Logsだけで気づけるようにするため。printedItemCountとの
+      // 不一致は明細の読み漏れ・水増しの兆候なので、警告として分けて出す。
+      if (typeof parsed.printedItemCount === 'number' && parsed.printedItemCount !== items.length) {
+        console.warn('scan-receipt: extracted item count does not match printed purchase count on receipt', {
+          key,
+          modelId: BEDROCK_VISION_MODEL_ID,
+          printedItemCount: parsed.printedItemCount,
+          extractedItemCount: items.length,
+        });
+      }
       console.log('scan-receipt: Bedrock vision extraction succeeded', {
         key,
         modelId: BEDROCK_VISION_MODEL_ID,
         store: parsed.store,
         date: parsed.date,
+        printedItemCount: parsed.printedItemCount ?? null,
         itemCount: items.length,
         items: items.map((it) => `${it.description} x${it.quantity}`),
       });
