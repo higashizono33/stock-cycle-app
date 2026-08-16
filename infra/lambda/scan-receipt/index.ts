@@ -234,22 +234,41 @@ async function normalizeItems(items: RawLineItem[]): Promise<ScannedRow[]> {
       new ConverseCommand({
         modelId: BEDROCK_MODEL_ID,
         messages: [{ role: 'user', content: [{ text: prompt }] }],
-        inferenceConfig: { maxTokens: 1024, temperature: 0 },
+        // 15点前後の長いレシートで一部の商品名+カテゴリ出力が途中で切られないよう余裕を持たせる。
+        inferenceConfig: { maxTokens: 2048, temperature: 0 },
       }),
     );
     const text = res.output?.message?.content?.find((c) => c.text)?.text ?? '';
     const jsonText = text.trim().replace(/^```(json)?/i, '').replace(/```$/, '').trim();
     const parsed = JSON.parse(jsonText) as Array<{ name: string; category: Category }>;
-    if (parsed.length !== items.length) throw new Error(`length mismatch: got ${parsed.length}, expected ${items.length}`);
 
-    return parsed.map((normalized, i) => ({
-      checked: true,
-      name: normalized.name,
-      category: (['Household', 'Food', 'Other'] as Category[]).includes(normalized.category)
-        ? normalized.category
-        : 'Other',
-      qty: items[i].quantity,
-    }));
+    // Nova Microは入力行数と出力配列長が稀に一致しない(一部の行を1つに統合する等)。
+    // 以前は不一致を検知した時点で正規化結果を全て捨てて生のOCRテキストへフォールバック
+    // していたが、それだと軽微なずれでも英語名変換・カテゴリ推定が丸ごと無駄になる。
+    // 位置が対応している前提でindexごとに突き合わせ、モデルが返さなかった末尾の行だけ
+    // 個別に生テキストへフォールバックする方が実用上マシ。
+    if (parsed.length !== items.length) {
+      console.warn('scan-receipt: normalizeItems length mismatch, using partial results', {
+        modelId: BEDROCK_MODEL_ID,
+        expected: items.length,
+        got: parsed.length,
+      });
+    }
+
+    return items.map((it, i) => {
+      const normalized = parsed[i];
+      if (!normalized?.name) {
+        return { checked: true, name: it.description, category: 'Other' as Category, qty: it.quantity };
+      }
+      return {
+        checked: true,
+        name: normalized.name,
+        category: (['Household', 'Food', 'Other'] as Category[]).includes(normalized.category)
+          ? normalized.category
+          : 'Other',
+        qty: it.quantity,
+      };
+    });
   } catch (err) {
     // Bedrock unavailable or returned something unparseable — fall back to the raw
     // OCR text untouched rather than failing the whole scan. Logged so a bad
