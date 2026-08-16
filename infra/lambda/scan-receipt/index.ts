@@ -13,9 +13,11 @@ const RECEIPTS_BUCKET_NAME = process.env.RECEIPTS_BUCKET_NAME!;
 const BEDROCK_MODEL_ID = process.env.BEDROCK_MODEL_ID ?? 'us.amazon.nova-micro-v1:0';
 // 2026-08-16実機検証: Nova Liteでは実物の(回転・ブレた)日本語レシート写真の読み取り精度が
 // 低く、店舗名・日付・明細すべてが実在しない内容にすり替わる(ハルシネーション)事例が発生した。
-// vision OCRの精度を優先しClaudeに切り替え。Haiku 4.5はこのAWSアカウントで
-// "not available for this account" のため使えず、Sonnet 4.5を使う(要件定義書10章 変更履歴参照)。
-const BEDROCK_VISION_MODEL_ID = process.env.BEDROCK_VISION_MODEL_ID ?? 'us.anthropic.claude-sonnet-4-5-20250929-v1:0';
+// Claude(Haiku 4.5 / Sonnet 4.5)への切り替えを試みたが、このAWSアカウントでは
+// どちらも"Model use case details have not been submitted for this account"
+// (Anthropicモデル利用のための申請フォーム未提出。要AWS Sales/コンソール対応)で
+// 呼び出せなかったため、Amazon自社モデルの中で最上位のNova Proに変更した。
+const BEDROCK_VISION_MODEL_ID = process.env.BEDROCK_VISION_MODEL_ID ?? 'us.amazon.nova-pro-v1:0';
 
 interface RequestBody {
   key?: string;
@@ -42,6 +44,15 @@ function imageFormatFromKey(key: string): ImageFormat {
 }
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+// Nova models can get stuck looping the same phrase verbatim on some receipt
+// photos (a real failure observed in production, see git history), running
+// past maxTokens mid-string and producing invalid JSON. A chunk of 6-80
+// characters repeated 4+ times back-to-back is something normal
+// receipt/JSON text never does, so treat it as a loop and discard the result.
+function hasDegenerateRepetition(text: string): boolean {
+  return /(.{6,80})\1{3,}/.test(text);
+}
 
 /**
  * requirements.md §3.2手順2: レシート画像から店舗名・購入日・明細(商品名・数量)を
@@ -93,11 +104,22 @@ async function extractReceiptFromImage(key: string): Promise<{ store: string; da
           },
         ],
         // 15点超の長いレシートでも明細が最後まで出力し切れるよう、2048から引き上げ。
-        inferenceConfig: { maxTokens: 3072, temperature: 0 },
+        // temperature: 0 (決定的デコード)はNova系モデルが同じ単語を無限ループするのを
+        // 誘発しやすいことが判明しているため、ループを崩す程度の揺らぎを与える。
+        inferenceConfig: { maxTokens: 3072, temperature: 0.2, topP: 0.9 },
       }),
     );
     const text = res.output?.message?.content?.find((c) => c.text)?.text ?? '';
     const jsonText = text.trim().replace(/^```(json)?/i, '').replace(/```$/, '').trim();
+
+    if (hasDegenerateRepetition(jsonText)) {
+      console.error('scan-receipt: model output looks like a repetition loop, discarding', {
+        key,
+        modelId: BEDROCK_VISION_MODEL_ID,
+        rawTextPreview: text.slice(0, 500),
+      });
+      return fallback;
+    }
 
     let parsed: { store?: string; date?: string; printedItemCount?: number | null; items?: RawLineItem[] };
     try {

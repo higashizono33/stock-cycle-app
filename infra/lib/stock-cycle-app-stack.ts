@@ -18,10 +18,10 @@ export interface StockCycleAppStackProps extends cdk.StackProps {
   bedrockModelId?: string;
   /** レシート画像のOCR+構造化抽出に使うvision対応モデルID。Textractは日本語レシートに
    * 対応していないため、こちらのマルチモーダルモデルを使う(2026-08-16変更)。
-   * Claude Haiku 4.5はNova Liteより精度が高かったが、このAWSアカウントでは
-   * "not available for this account"(要AWS Sales問い合わせ)で使えなかったため、
-   * 同アカウントで実際に呼び出せることを確認済みのClaude Sonnet 4.5を既定にした
-   * (2026-08-16)。低頻度利用(家族の家庭内利用)のためコスト差は実質無視できる。 */
+   * Claude(Haiku 4.5 / Sonnet 4.5)への切り替えを試みたが、このAWSアカウントは
+   * どちらも"Model use case details have not been submitted for this account"
+   * (Anthropicモデル利用の申請フォーム未提出)で呼び出せなかったため断念し、
+   * Amazon自社モデルの中で最上位のNova Proを既定にした(2026-08-16)。 */
   bedrockVisionModelId?: string;
 }
 
@@ -39,10 +39,11 @@ export class StockCycleAppStack extends cdk.Stack {
     const bedrockModelId = props.bedrockModelId ?? 'us.amazon.nova-micro-v1:0';
     // vision(レシートOCR)はNova Liteで実機検証したところ、回転・ブレた実物の日本語
     // レシート写真で店舗名・日付・明細のすべてが実在しない内容に化ける事例が発生したため、
-    // より読み取り精度の高いClaude系に変更。Haiku 4.5はこのAWSアカウントでは
-    // "not available for this account" で呼び出せなかった(要AWS Sales問い合わせ)ため、
-    // 実際に呼び出せることを確認済みのSonnet 4.5を使う。
-    const bedrockVisionModelId = props.bedrockVisionModelId ?? 'us.anthropic.claude-sonnet-4-5-20250929-v1:0';
+    // Claude(Haiku 4.5 / Sonnet 4.5)への切り替えを試みたが、このAWSアカウントは
+    // どちらも"Model use case details have not been submitted for this account"
+    // (Anthropicモデル利用の申請フォーム未提出)で呼び出せなかったため断念し、
+    // Amazon自社モデルの中で最上位のNova Proを使う。
+    const bedrockVisionModelId = props.bedrockVisionModelId ?? 'us.amazon.nova-pro-v1:0';
 
     const storage = new StorageConstruct(this, 'Storage');
     const dashboardUrl = `https://${storage.dashboardDistribution.distributionDomainName}`;
