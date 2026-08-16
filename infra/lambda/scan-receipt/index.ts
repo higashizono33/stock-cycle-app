@@ -47,11 +47,14 @@ const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 // Nova models can get stuck looping the same phrase verbatim on some receipt
 // photos (a real failure observed in production, see git history), running
-// past maxTokens mid-string and producing invalid JSON. A chunk of 6-80
-// characters repeated 4+ times back-to-back is something normal
-// receipt/JSON text never does, so treat it as a loop and discard the result.
+// past maxTokens mid-string and producing invalid JSON. A chunk of characters
+// repeated 4+ times back-to-back is something normal receipt/JSON text never
+// does, so treat it as a loop and discard the result. The upper bound is
+// generous (400) because Japanese item names are JSON-escaped as \uXXXX —
+// six ASCII characters per glyph — so one repeated item name+wrapper easily
+// exceeds a tighter cap and would silently slip through.
 function hasDegenerateRepetition(text: string): boolean {
-  return /(.{6,80})\1{3,}/.test(text);
+  return /(.{6,400})\1{3,}/.test(text);
 }
 
 /**
@@ -81,13 +84,13 @@ async function extractReceiptFromImage(key: string): Promise<{ store: string; da
     'How to read the item list (do this carefully, step by step):',
     '- Scan the item section systematically from top to bottom, one printed line at a time. Do not skip around or guess from a partial glance.',
     '- Each real item is a distinct printed line that has BOTH a product name AND its own price on the same line (Japanese receipts often prefix each item line with "*" or "＊", with the price right-aligned). If you cannot find a matching printed price for a name, do not include it.',
-    '- Many Japanese receipts print a purchase count near the bottom, such as "お買上点数15点" or "点数：15点" (meaning "15 items purchased"). If you see this, count how many item lines you actually found and make sure the count matches. If your count is short, go back and look again for lines you may have missed near the top, bottom, or a rotated/cut-off edge of the photo. If your count is over, you likely mis-split one item into two or accidentally included a non-item line — merge or remove the extra one.',
-    '- Report the printed purchase-count number (if visible) as "printedItemCount" so it can be double-checked later; use null if the receipt does not show one.',
+    '- Many Japanese receipts print a purchase count near the bottom, such as "お買上点数15点" or "点数：15点" (meaning "15 items purchased"). If you see this, count how many item lines you actually found. If your count is short, it is fine to go back and look again for lines you may have missed near the top, bottom, or a rotated/cut-off edge of the photo — but ONLY add a line if you can actually see it printed. If you genuinely cannot find all of them, report fewer items; do NOT reach the target count by repeating or duplicating an item you already found. Copying the same item multiple times to hit the count is strictly forbidden and worse than reporting too few.',
+    '- Report the printed purchase-count number (if visible) as "printedItemCount" so it can be double-checked later; use null if the receipt does not show one. This field is for cross-checking only — it must never influence how many times you list an item.',
     'Rules:',
     '- Normalize the date to ISO format YYYY-MM-DD. Japanese receipts often show dates as 令和6年3月10日 (Reiwa era; Reiwa 1 = 2019) or 2024/03/10 or 2024年3月10日 — convert these correctly to 2024-03-10 style.',
     '- Keep each item\'s description exactly as printed, in its original language (do not translate here — a later step handles that). Japanese receipts often print item names in half-width katakana (ｶﾀｶﾅ) — transcribe them as best you can even if partially garbled by the printer.',
     '- Do NOT include subtotal, tax, total, change, payment method, points, discount, coupon, or purchase-count lines as items — only actual purchased products with their own price.',
-    '- NEVER invent, guess, or pad the list with a plausible-sounding item (e.g. a generic "Toothbrush" or "Snack") just because it seems like something a store like this might sell, or to round out the count. Every item you output must correspond to text you can actually see printed on the receipt. If you are unsure whether a line is a real separate item, it is better to leave it out than to invent one.',
+    '- NEVER invent, guess, or pad the list with a plausible-sounding item (e.g. a generic "Toothbrush" or "Snack") just because it seems like something a store like this might sell, or to round out the count. Every item you output must correspond to text you can actually see printed on the receipt. If you are unsure whether a line is a real separate item, it is better to leave it out than to invent one. The same applies to duplicating a real item you already read — each entry in the output must correspond to a physically distinct printed line, never a copy.',
     '- That said, do extract every item you can genuinely read, even if you are not 100% sure of the exact spelling of a name — a human reviews and corrects this before it is saved, so an approximate but real reading is fine. Only return an empty items array if the image is genuinely unreadable (e.g. solid black/blank, or no receipt visible at all).',
     '- Respond with ONLY a JSON object, no prose, no markdown code fences, in exactly this shape:',
     '{"store": string, "date": "YYYY-MM-DD", "printedItemCount": number | null, "items": [{"description": string, "quantity": number}]}',
@@ -142,6 +145,23 @@ async function extractReceiptFromImage(key: string): Promise<{ store: string; da
         description: it.description.trim(),
         quantity: Number.isFinite(it.quantity) && it.quantity > 0 ? Math.round(it.quantity) : 1,
       }));
+
+    // A second hallucination shape observed in production (distinct from the raw-text
+    // repetition loop above): the model reads a printed purchase count (e.g. "15点")
+    // but can't actually make out 15 distinct lines, so it pads the array by copying
+    // one item name 15 times — this parses as perfectly valid JSON, so it wouldn't be
+    // caught by hasDegenerateRepetition. 4+ items that are ALL identical is not
+    // something a real diverse grocery receipt produces; treat it as untrustworthy.
+    const uniqueDescriptions = new Set(items.map((it) => it.description.toLowerCase()));
+    if (items.length >= 4 && uniqueDescriptions.size === 1) {
+      console.error('scan-receipt: all extracted items are identical — likely padded to match the printed item count, discarding', {
+        key,
+        modelId: BEDROCK_VISION_MODEL_ID,
+        description: items[0].description,
+        itemCount: items.length,
+      });
+      return fallback;
+    }
 
     if (items.length === 0) {
       // 例外は起きていないが、モデルが「読めなかった」と判断したケース。原因切り分け用にログを残す。
