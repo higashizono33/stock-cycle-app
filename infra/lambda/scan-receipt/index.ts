@@ -1,14 +1,17 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
-import { AnalyzeExpenseCommand, TextractClient } from '@aws-sdk/client-textract';
+import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
 import type { Category, ScannedRow, ScanResult } from '@stock-cycle-app/core';
 import { errorResponse, jsonResponse } from '../shared/http.js';
 
-const textract = new TextractClient({});
+const s3 = new S3Client({});
 const bedrock = new BedrockRuntimeClient({});
 
 const RECEIPTS_BUCKET_NAME = process.env.RECEIPTS_BUCKET_NAME!;
-const BEDROCK_MODEL_ID = process.env.BEDROCK_MODEL_ID ?? 'amazon.nova-micro-v1:0';
+// us-east-2はNova系モデルの直接提供リージョンではないため、クロスリージョン推論
+// プロファイル("us."プレフィックス)のモデルIDを使う(infra/lib/stock-cycle-app-stack.ts参照)。
+const BEDROCK_MODEL_ID = process.env.BEDROCK_MODEL_ID ?? 'us.amazon.nova-micro-v1:0';
+const BEDROCK_VISION_MODEL_ID = process.env.BEDROCK_VISION_MODEL_ID ?? 'us.amazon.nova-lite-v1:0';
 
 interface RequestBody {
   key?: string;
@@ -19,58 +22,107 @@ interface RawLineItem {
   quantity: number;
 }
 
-function fieldText(field: { Type?: { Text?: string }; ValueDetection?: { Text?: string } } | undefined): string | undefined {
-  return field?.ValueDetection?.Text;
+type ImageFormat = 'jpeg' | 'png' | 'gif' | 'webp';
+
+const IMAGE_FORMAT_BY_EXT: Record<string, ImageFormat> = {
+  jpg: 'jpeg',
+  jpeg: 'jpeg',
+  png: 'png',
+  gif: 'gif',
+  webp: 'webp',
+};
+
+function imageFormatFromKey(key: string): ImageFormat {
+  const ext = key.split('.').pop()?.toLowerCase() ?? '';
+  return IMAGE_FORMAT_BY_EXT[ext] ?? 'jpeg';
 }
 
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 /**
- * requirements.md §3.2手順2: AWS Textract (AnalyzeExpense) でレシートから
- * 店舗名・購入日・明細(商品名・数量)を抽出する。かすれ・破損等で明細が
- * 1件も取れなかった場合は rows: [] を返し、呼び出し元(フロントエンド)が
- * 手動入力画面へフォールバックする(app/src/lib/mockOcr.tsのモックと同じ契約)。
+ * requirements.md §3.2手順2: レシート画像から店舗名・購入日・明細(商品名・数量)を
+ * 抽出する。
+ *
+ * 【2026-08-16 設計変更】当初はAWS Textract(AnalyzeExpense)を使う想定だったが、
+ * 同APIは英語のみ対応(日本語のレシートは非対応)であることが判明した。このアプリの
+ * 実利用は日本語レシート(渡米前の家庭での利用)が前提のため、Textractをやめ、
+ * Bedrockのマルチモーダル(vision対応)モデルにレシート画像を直接渡してOCRと
+ * 構造化抽出を1回のLLM呼び出しで行う方式に変更した。
+ *
+ * かすれ・破損等で明細が1件も取れなかった場合は items: [] を返し、呼び出し元
+ * (フロントエンド)が手動入力画面へフォールバックする(requirements.md §3.2)。
  */
-async function analyzeReceipt(key: string): Promise<{ store: string; date: string; items: RawLineItem[] }> {
-  const result = await textract.send(
-    new AnalyzeExpenseCommand({ Document: { S3Object: { Bucket: RECEIPTS_BUCKET_NAME, Name: key } } }),
-  );
+async function extractReceiptFromImage(key: string): Promise<{ store: string; date: string; items: RawLineItem[] }> {
+  const fallback = { store: 'Unknown store', date: new Date().toISOString().slice(0, 10), items: [] as RawLineItem[] };
 
-  const doc = result.ExpenseDocuments?.[0];
-  const summary = doc?.SummaryFields ?? [];
-  const vendor = summary.find((f) => f.Type?.Text === 'VENDOR_NAME');
-  const receiptDate = summary.find((f) => f.Type?.Text === 'INVOICE_RECEIPT_DATE');
+  const obj = await s3.send(new GetObjectCommand({ Bucket: RECEIPTS_BUCKET_NAME, Key: key }));
+  const bytes = await obj.Body?.transformToByteArray();
+  if (!bytes) return fallback;
 
-  const items: RawLineItem[] = [];
-  for (const group of doc?.LineItemGroups ?? []) {
-    for (const lineItem of group.LineItems ?? []) {
-      const fields = lineItem.LineItemExpenseFields ?? [];
-      const description = fieldText(fields.find((f) => f.Type?.Text === 'ITEM'));
-      if (!description) continue;
-      const quantityText = fieldText(fields.find((f) => f.Type?.Text === 'QUANTITY'));
-      const quantity = Number.parseInt(quantityText ?? '1', 10);
-      items.push({ description, quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1 });
-    }
+  const prompt = [
+    'You are reading a photo of a household shopping receipt. The receipt may be written in Japanese, English, or another language — read it in whatever language it is written in.',
+    'Extract the store name, the purchase date, and every real product line item (name and quantity).',
+    'Rules:',
+    '- Normalize the date to ISO format YYYY-MM-DD. Japanese receipts often show dates as 令和6年3月10日 (Reiwa era; Reiwa 1 = 2019) or 2024/03/10 or 2024年3月10日 — convert these correctly to 2024-03-10 style.',
+    '- Keep each item\'s description exactly as printed, in its original language (do not translate here — a later step handles that).',
+    '- Do NOT include subtotal, tax, total, change, payment method, or loyalty point lines as items — only actual purchased products.',
+    '- If the photo is too blurry or damaged to confidently read any product line items, return an empty items array rather than guessing.',
+    '- Respond with ONLY a JSON object, no prose, no markdown code fences, in exactly this shape:',
+    '{"store": string, "date": "YYYY-MM-DD", "items": [{"description": string, "quantity": number}]}',
+  ].join('\n');
+
+  try {
+    const res = await bedrock.send(
+      new ConverseCommand({
+        modelId: BEDROCK_VISION_MODEL_ID,
+        messages: [
+          {
+            role: 'user',
+            content: [{ image: { format: imageFormatFromKey(key), source: { bytes } } }, { text: prompt }],
+          },
+        ],
+        inferenceConfig: { maxTokens: 2048, temperature: 0 },
+      }),
+    );
+    const text = res.output?.message?.content?.find((c) => c.text)?.text ?? '';
+    const jsonText = text.trim().replace(/^```(json)?/i, '').replace(/```$/, '').trim();
+    const parsed = JSON.parse(jsonText) as { store?: string; date?: string; items?: RawLineItem[] };
+
+    const items: RawLineItem[] = (parsed.items ?? [])
+      .filter((it) => typeof it?.description === 'string' && it.description.trim())
+      .map((it) => ({
+        description: it.description.trim(),
+        quantity: Number.isFinite(it.quantity) && it.quantity > 0 ? Math.round(it.quantity) : 1,
+      }));
+
+    return {
+      store: parsed.store?.trim() || fallback.store,
+      date: parsed.date && ISO_DATE_RE.test(parsed.date) ? parsed.date : fallback.date,
+      items,
+    };
+  } catch {
+    // Bedrockが使えない/レスポンスが不正な場合も明細0件として手動入力へフォールバックさせる
+    return fallback;
   }
-
-  return {
-    store: fieldText(vendor) ?? 'Unknown store',
-    date: fieldText(receiptDate) ?? new Date().toISOString().slice(0, 10),
-    items,
-  };
 }
 
 /**
  * requirements.md §4「商品名の名寄せ」: Bedrock(LLM)で表記ゆれを吸収した
- * 一般名(例:「Charmin Ultra Soft 12ロール」→「Toilet Paper」)とカテゴリを
- * 推定する。レスポンスが期待通りJSONで返らなかった場合は、生のテキストを
- * そのままcategory=Otherとして採用し、処理全体は失敗させない。
+ * 一般名(例:「Charmin Ultra Soft 12ロール」→「Toilet Paper」、
+ * 「アリエール 詰め替え用」→「Laundry Detergent」)とカテゴリを推定する。
+ * requirements.md §5よりUI/通知は英語に統一する方針のため、入力が日本語でも
+ * 出力の商品名は常に英語にする。レスポンスが期待通りJSONで返らなかった場合は、
+ * 生のテキストをそのままcategory=Otherとして採用し、処理全体は失敗させない。
  */
 async function normalizeItems(items: RawLineItem[]): Promise<ScannedRow[]> {
   if (items.length === 0) return [];
 
   const prompt = [
     'You normalize raw grocery/household receipt line items into a generic product name and category.',
+    'The input lines may be in Japanese, English, or another language.',
     'Rules:',
-    '- Use the general product type as the name, not the brand (e.g. "Charmin Ultra Soft 12pk" -> "Toilet Paper").',
+    '- Always respond with the product name in English, regardless of the input language.',
+    '- Use the general product type as the name, not the brand (e.g. "Charmin Ultra Soft 12pk" -> "Toilet Paper", "アリエール 詰め替え用" -> "Laundry Detergent", "コカコーラ 500ml" -> "Coca-Cola").',
     '- category must be exactly one of: "Household", "Food", "Other".',
     '- Respond with ONLY a JSON array, no prose, no markdown fences.',
     '- The array must have exactly one object per input line, in the same order: {"name": string, "category": string}',
@@ -116,7 +168,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   }
   if (!body.key) return errorResponse(400, 'key is required (from POST /receipts/upload-url)');
 
-  const { store, date, items } = await analyzeReceipt(body.key);
+  const { store, date, items } = await extractReceiptFromImage(body.key);
   const rows = await normalizeItems(items);
 
   const scanResult: ScanResult = { store, date, rows };

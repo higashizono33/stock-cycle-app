@@ -1,0 +1,94 @@
+name: Deploy
+
+# mainブランチへのpushをトリガーに本番環境(AWS)へ自動デプロイする。
+#
+# AWSへの認証は長期アクセスキーをSecretsに置かず、GitHub OIDCで
+# IAMロールを一時的にAssumeする方式(bilingual-appと同じ構成)。有効化手順:
+#   1. Takashiさん自身のAWS管理者権限で、GitHub OIDCデプロイ用IAMロールを作成する
+#      (infra/lib/github-oidc-stack.ts。GitHub Actions自身には作らせられないため手動デプロイ専用。
+#      スタック名は "GitHubOidcStack" にしないこと — bilingual-appの同名スタックと衝突する)
+#        cd infra && npx cdk deploy StockCycleAppGitHubOidcStack -c githubRepoId=<repo id>
+#      出力される DeployRoleArn を控える
+#   2. リポジトリの Settings > Secrets and variables > Actions に登録:
+#      - AWS_DEPLOY_ROLE_ARN (手順1のDeployRoleArn)
+#      - LINE_CHANNEL_ID / LINE_CHANNEL_SECRET (LINE LoginチャネルのChannel ID/secret)
+#      - (任意) BUDGET_ALERT_EMAIL
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write # OIDCでAWS認証するために必要
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy infra + app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies (workspace root)
+        run: npm ci
+
+      - name: Build @stock-cycle-app/core (Lambdaコードから参照される共有ロジック)
+        run: npm run build:core
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-2
+          # GitHubOidcStackのトラストポリシーは sts:AssumeRoleWithWebIdentity のみ許可
+          # (sts:TagSessionは許可していない)。デフォルトのセッションタグ付けを行うと
+          # "Not authorized to perform sts:AssumeRoleWithWebIdentity" という紛らわしいエラーになる
+          role-skip-session-tagging: true
+
+      - name: Deploy CDK stack (StockCycleAppStackのみ。*GitHubOidcStackは対象外)
+        working-directory: infra
+        env:
+          LINE_CHANNEL_ID: ${{ secrets.LINE_CHANNEL_ID }}
+          LINE_CHANNEL_SECRET: ${{ secrets.LINE_CHANNEL_SECRET }}
+          BUDGET_ALERT_EMAIL: ${{ secrets.BUDGET_ALERT_EMAIL }}
+        run: |
+          CONTEXT_ARGS="-c lineChannelId=$LINE_CHANNEL_ID -c lineChannelSecret=$LINE_CHANNEL_SECRET"
+          if [ -n "$BUDGET_ALERT_EMAIL" ]; then
+            CONTEXT_ARGS="$CONTEXT_ARGS -c budgetAlertEmail=$BUDGET_ALERT_EMAIL"
+          fi
+          npx cdk deploy StockCycleAppStack --require-approval never $CONTEXT_ARGS
+
+      - name: Resolve stack outputs and app config
+        id: stack-outputs
+        run: |
+          OUTPUTS=$(aws cloudformation describe-stacks --stack-name StockCycleAppStack --query "Stacks[0].Outputs" --output json)
+          val() { echo "$OUTPUTS" | jq -r ".[] | select(.OutputKey==\"$1\") | .OutputValue"; }
+          echo "bucket=$(val DashboardBucketName)" >> "$GITHUB_OUTPUT"
+          echo "distribution_id=$(val DashboardDistributionId)" >> "$GITHUB_OUTPUT"
+          echo "dashboard_url=$(val DashboardUrl)" >> "$GITHUB_OUTPUT"
+          echo "api_url=$(val ApiUrl)" >> "$GITHUB_OUTPUT"
+          echo "user_pool_hosted_ui_domain=$(val UserPoolHostedUiDomain)" >> "$GITHUB_OUTPUT"
+          echo "user_pool_client_id=$(val UserPoolClientId)" >> "$GITHUB_OUTPUT"
+
+      - name: Build app (app/)
+        working-directory: app
+        env:
+          VITE_API_URL: ${{ steps.stack-outputs.outputs.api_url }}
+          VITE_COGNITO_DOMAIN: ${{ steps.stack-outputs.outputs.user_pool_hosted_ui_domain }}.auth.us-east-2.amazoncognito.com
+          VITE_COGNITO_CLIENT_ID: ${{ steps.stack-outputs.outputs.user_pool_client_id }}
+          VITE_COGNITO_REDIRECT_URI: ${{ steps.stack-outputs.outputs.dashboard_url }}/
+        run: npm run build
+
+      - name: Sync app static files to S3
+        run: aws s3 sync app/dist "s3://${{ steps.stack-outputs.outputs.bucket }}/" --delete
+
+      - name: Invalidate CloudFront cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "${{ steps.stack-outputs.outputs.distribution_id }}" \
+            --paths "/*"

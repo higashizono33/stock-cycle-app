@@ -16,6 +16,9 @@ export interface StockCycleAppStackProps extends cdk.StackProps {
   monthlyBudgetLimitUsd?: number;
   /** Bedrockでの商品名正規化に使うモデルID(要件定義書7章「低コストなNova Microに固定」) */
   bedrockModelId?: string;
+  /** レシート画像のOCR+構造化抽出に使うvision対応モデルID。Textractは日本語レシートに
+   * 対応していないため、こちらのマルチモーダルモデルを使う(2026-08-16変更) */
+  bedrockVisionModelId?: string;
 }
 
 /**
@@ -26,7 +29,11 @@ export class StockCycleAppStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: StockCycleAppStackProps) {
     super(scope, id, props);
 
-    const bedrockModelId = props.bedrockModelId ?? 'amazon.nova-micro-v1:0';
+    // 2026-08-16: us-east-2はNova系モデルの直接提供リージョンではなく、クロスリージョン
+    // 推論プロファイル("us."プレフィックス)経由でのみ呼び出せる。そのためモデルIDは
+    // プロファイルID形式にする(ApiConstruct側のIAMポリシーも合わせて対応済み)。
+    const bedrockModelId = props.bedrockModelId ?? 'us.amazon.nova-micro-v1:0';
+    const bedrockVisionModelId = props.bedrockVisionModelId ?? 'us.amazon.nova-lite-v1:0';
 
     const storage = new StorageConstruct(this, 'Storage');
     const dashboardUrl = `https://${storage.dashboardDistribution.distributionDomainName}`;
@@ -45,6 +52,7 @@ export class StockCycleAppStack extends cdk.Stack {
       lineChannelSecret: notification.lineChannelSecret,
       lineChannelAccessTokenSecret: notification.lineChannelAccessTokenSecret,
       bedrockModelId,
+      bedrockVisionModelId,
     });
     new BudgetConstruct(this, 'Budget', {
       alertEmail: props.budgetAlertEmail,

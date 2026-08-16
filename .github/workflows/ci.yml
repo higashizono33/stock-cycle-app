@@ -1,0 +1,47 @@
+name: CI
+
+# Pull Request時にlint/build/synthを実行する。
+# npm workspaces構成(packages/core, app, infra)のため、ルートで一括インストールしてから
+# 各ワークスペースのスクリプトを順番に実行する。infraはpackages/coreのビルド成果物(dist/)を
+# Lambdaコードから参照するため、先にcoreをビルドしてからinfraのbuild/synthを実行する。
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: lint / build / cdk synth
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies (workspace root)
+        run: npm ci
+
+      - name: Build @stock-cycle-app/core (フロント/Lambda共有ロジック)
+        run: npm run build:core
+
+      - name: Lint app
+        run: npm run lint:app
+
+      - name: Build app (React + Vite)
+        run: npm run build:app
+
+      - name: Build infra (CDKスタック定義の型チェック)
+        run: npm run build:infra
+
+      - name: cdk synth (Lambdaバンドル込みでCloudFormationテンプレートを検証)
+        # 実際のLINEチャネル値は不要(synthのみ、デプロイはしない)。ダミー値で通す
+        working-directory: infra
+        run: npx cdk synth -c lineChannelId=ci-placeholder -c lineChannelSecret=ci-placeholder
