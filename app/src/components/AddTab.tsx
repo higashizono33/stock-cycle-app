@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { useStore } from '../state/StoreContext';
 import { requestReceiptUploadUrl, scanReceipt as scanReceiptApi, uploadReceiptPhoto } from '../lib/api';
+import { normalizeReceiptPhoto } from '../lib/image';
 import type { Category, ScannedRow } from '@stock-cycle-app/core';
 import { todayISO } from '@stock-cycle-app/core';
 
@@ -33,8 +34,9 @@ export default function AddTab({ onDone, showToast }: { onDone: () => void; show
   async function onPhotoSelected(file: File | null) {
     if (!file) return;
     setStep('loading');
-    const { uploadUrl, key } = await requestReceiptUploadUrl(file.type || 'image/jpeg');
-    await uploadReceiptPhoto(uploadUrl, file);
+    const normalized = await normalizeReceiptPhoto(file);
+    const { uploadUrl, key } = await requestReceiptUploadUrl(normalized.type || 'image/jpeg');
+    await uploadReceiptPhoto(uploadUrl, normalized);
     const result = await scanReceiptApi(key);
     // requirements.md §3.2: if OCR couldn't extract any product info, skip
     // the confirm screen and drop straight into manual entry.
