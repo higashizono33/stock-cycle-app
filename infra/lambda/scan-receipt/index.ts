@@ -60,13 +60,14 @@ async function extractReceiptFromImage(key: string): Promise<{ store: string; da
   if (!bytes) return fallback;
 
   const prompt = [
-    'You are reading a photo of a household shopping receipt. The receipt may be written in Japanese, English, or another language — read it in whatever language it is written in.',
+    'You are reading a photo of a household shopping receipt (a long thermal-paper strip, photographed with a phone). The receipt may be written in Japanese, English, or another language — read it in whatever language it is written in.',
+    'The photo may be rotated (sideways or upside-down), taken at an angle, slightly blurry, or have uneven lighting. Do your best to read it anyway — mentally rotate/straighten the text as needed. Long Japanese receipts are very often photographed sideways because the receipt itself is a tall narrow strip; this is normal and not a reason to give up.',
     'Extract the store name, the purchase date, and every real product line item (name and quantity).',
     'Rules:',
     '- Normalize the date to ISO format YYYY-MM-DD. Japanese receipts often show dates as 令和6年3月10日 (Reiwa era; Reiwa 1 = 2019) or 2024/03/10 or 2024年3月10日 — convert these correctly to 2024-03-10 style.',
-    '- Keep each item\'s description exactly as printed, in its original language (do not translate here — a later step handles that).',
-    '- Do NOT include subtotal, tax, total, change, payment method, or loyalty point lines as items — only actual purchased products.',
-    '- If the photo is too blurry or damaged to confidently read any product line items, return an empty items array rather than guessing.',
+    '- Keep each item\'s description exactly as printed, in its original language (do not translate here — a later step handles that). Japanese receipts often print item names in half-width katakana (ｶﾀｶﾅ) — transcribe them as best you can even if partially garbled by the printer.',
+    '- Do NOT include subtotal, tax, total, change, payment method, points, or discount lines as items — only actual purchased products.',
+    '- Extract every item you can read, even if you are not 100% sure of a name or quantity — a human reviews and corrects this before it is saved, so a partial or approximate read is much more useful than giving up. Only return an empty items array if the image is genuinely unreadable (e.g. solid black/blank, or no receipt visible at all).',
     '- Respond with ONLY a JSON object, no prose, no markdown code fences, in exactly this shape:',
     '{"store": string, "date": "YYYY-MM-DD", "items": [{"description": string, "quantity": number}]}',
   ].join('\n');
@@ -86,7 +87,21 @@ async function extractReceiptFromImage(key: string): Promise<{ store: string; da
     );
     const text = res.output?.message?.content?.find((c) => c.text)?.text ?? '';
     const jsonText = text.trim().replace(/^```(json)?/i, '').replace(/```$/, '').trim();
-    const parsed = JSON.parse(jsonText) as { store?: string; date?: string; items?: RawLineItem[] };
+
+    let parsed: { store?: string; date?: string; items?: RawLineItem[] };
+    try {
+      parsed = JSON.parse(jsonText) as { store?: string; date?: string; items?: RawLineItem[] };
+    } catch (parseErr) {
+      // モデルの生レスポンスをログに残す。JSONで返らない原因(プロンプト崩れ・途中で
+      // 切れた等)を後から追えるようにするため、失敗を握りつぶさない。
+      console.error('scan-receipt: failed to parse Bedrock vision response as JSON', {
+        key,
+        modelId: BEDROCK_VISION_MODEL_ID,
+        rawTextPreview: text.slice(0, 500),
+        parseErr,
+      });
+      return fallback;
+    }
 
     const items: RawLineItem[] = (parsed.items ?? [])
       .filter((it) => typeof it?.description === 'string' && it.description.trim())
@@ -95,13 +110,24 @@ async function extractReceiptFromImage(key: string): Promise<{ store: string; da
         quantity: Number.isFinite(it.quantity) && it.quantity > 0 ? Math.round(it.quantity) : 1,
       }));
 
+    if (items.length === 0) {
+      // 例外は起きていないが、モデルが「読めなかった」と判断したケース。原因切り分け用にログを残す。
+      console.warn('scan-receipt: Bedrock vision returned zero items', { key, modelId: BEDROCK_VISION_MODEL_ID, rawTextPreview: text.slice(0, 500) });
+    }
+
     return {
       store: parsed.store?.trim() || fallback.store,
       date: parsed.date && ISO_DATE_RE.test(parsed.date) ? parsed.date : fallback.date,
       items,
     };
-  } catch {
-    // Bedrockが使えない/レスポンスが不正な場合も明細0件として手動入力へフォールバックさせる
+  } catch (err) {
+    // Bedrock呼び出し自体が失敗した場合(モデルアクセス未許可・IAM権限不足・画像形式不正等)。
+    // CloudWatch Logsで原因を追えるよう、握りつぶさずログに残してからフォールバックする。
+    console.error('scan-receipt: Bedrock vision invocation failed', {
+      key,
+      modelId: BEDROCK_VISION_MODEL_ID,
+      err,
+    });
     return fallback;
   }
 }
