@@ -105,9 +105,9 @@ async function extractReceiptFromImage(key: string): Promise<{ store: string; da
           },
         ],
         // 15点超の長いレシートでも明細が最後まで出力し切れるよう、2048から引き上げ。
-        // temperature: 0 (決定的デコード)はNova系モデルが同じ単語を無限ループするのを
-        // 誘発しやすいことが判明しているため、ループを崩す程度の揺らぎを与える。
-        inferenceConfig: { maxTokens: 3072, temperature: 0.2, topP: 0.9 },
+        // Claudeモデルはtemperature/topPを同時指定できない(ValidationException)ため、
+        // temperatureのみ指定する。
+        inferenceConfig: { maxTokens: 3072, temperature: 0.2 },
       }),
     );
     const text = res.output?.message?.content?.find((c) => c.text)?.text ?? '';
