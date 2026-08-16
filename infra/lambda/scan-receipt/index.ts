@@ -207,10 +207,12 @@ async function extractReceiptFromImage(key: string): Promise<{ store: string; da
 /**
  * requirements.md §4「商品名の名寄せ」: Bedrock(LLM)で表記ゆれを吸収した
  * 一般名(例:「Charmin Ultra Soft 12ロール」→「Toilet Paper」、
- * 「アリエール 詰め替え用」→「Laundry Detergent」)とカテゴリを推定する。
- * requirements.md §5よりUI/通知は英語に統一する方針のため、入力が日本語でも
- * 出力の商品名は常に英語にする。レスポンスが期待通りJSONで返らなかった場合は、
- * 生のテキストをそのままcategory=Otherとして採用し、処理全体は失敗させない。
+ * 「アリエール 詰め替え用」→「洗濯洗剤」)とカテゴリを推定する。
+ * 2026-08-16: 以前は常に英語へ翻訳していたが、日本語レシートはそのまま日本語で表示して
+ * ほしいとの要望を受け、入力の言語(表記)を維持したまま一般名化するように変更した
+ * (UIのラベル文言自体は引き続き英語。商品名の言語のみ入力に追従する)。
+ * レスポンスが期待通りJSONで返らなかった場合は、生のテキストをそのまま
+ * category=Otherとして採用し、処理全体は失敗させない。
  */
 async function normalizeItems(items: RawLineItem[]): Promise<ScannedRow[]> {
   if (items.length === 0) return [];
@@ -219,8 +221,8 @@ async function normalizeItems(items: RawLineItem[]): Promise<ScannedRow[]> {
     'You normalize raw grocery/household receipt line items into a generic product name and category.',
     'The input lines may be in Japanese, English, or another language.',
     'Rules:',
-    '- Always respond with the product name in English, regardless of the input language.',
-    '- Use the general product type as the name, not the brand (e.g. "Charmin Ultra Soft 12pk" -> "Toilet Paper", "アリエール 詰め替え用" -> "Laundry Detergent", "コーラ 500ml" -> "Soda"). Do not invent or default to a specific example brand/product from these instructions — base the name only on the actual input line given below.',
+    '- Respond in the SAME language/script as the input line. Do not translate — if the input is Japanese, the output name must also be Japanese; if English, keep it English.',
+    '- Use the general product type as the name, not the brand, but in the input\'s own language (e.g. "Charmin Ultra Soft 12pk" -> "Toilet Paper", "アリエール 詰め替え用" -> "洗濯洗剤", "コーラ 500ml" -> "コーラ" or "炭酸飲料"). Do not invent or default to a specific example brand/product from these instructions — base the name only on the actual input line given below.',
     '- category must be exactly one of: "Household", "Food", "Other".',
     '- Respond with ONLY a JSON array, no prose, no markdown fences.',
     '- The array must have exactly one object per input line, in the same order: {"name": string, "category": string}',
