@@ -39,6 +39,14 @@ function imageFormatFromKey(key: string): ImageFormat {
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+// Catches the Bedrock vision model getting stuck looping the same phrase — a
+// known failure mode on some receipt photos — before we even try to parse
+// it as JSON. A chunk of 6+ characters repeated 4+ times back-to-back is
+// something normal receipt/JSON text never does.
+function hasDegenerateRepetition(text: string): boolean {
+  return /(.{6,80})\1{3,}/.test(text);
+}
+
 /**
  * requirements.md §3.2手順2: レシート画像から店舗名・購入日・明細(商品名・数量)を
  * 抽出する。
@@ -82,11 +90,23 @@ async function extractReceiptFromImage(key: string): Promise<{ store: string; da
             content: [{ image: { format: imageFormatFromKey(key), source: { bytes } } }, { text: prompt }],
           },
         ],
-        inferenceConfig: { maxTokens: 2048, temperature: 0 },
+        // temperature: 0 (greedy decoding) turned out to make this model prone to getting
+        // stuck repeating the same word/phrase forever on some receipt photos, running past
+        // maxTokens mid-string and producing invalid JSON. A little randomness breaks the loop.
+        inferenceConfig: { maxTokens: 2048, temperature: 0.2, topP: 0.9 },
       }),
     );
     const text = res.output?.message?.content?.find((c) => c.text)?.text ?? '';
     const jsonText = text.trim().replace(/^```(json)?/i, '').replace(/```$/, '').trim();
+
+    if (hasDegenerateRepetition(jsonText)) {
+      console.error('scan-receipt: model output looks like a repetition loop, discarding', {
+        key,
+        modelId: BEDROCK_VISION_MODEL_ID,
+        rawTextPreview: text.slice(0, 500),
+      });
+      return fallback;
+    }
 
     let parsed: { store?: string; date?: string; items?: RawLineItem[] };
     try {
