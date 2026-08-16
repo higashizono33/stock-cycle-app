@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>StockCycle - UI Prototype</title>
+<style>
+  :root{
+    --primary:#2F9E7F;
+    --primary-dark:#22795F;
+    --primary-light:#E4F5EF;
+    --amber:#F2994A;
+    --amber-light:#FDF1E4;
+    --red:#EB5757;
+    --red-light:#FCEAEA;
+    --bg:#F4F6F7;
+    --card:#FFFFFF;
+    --text:#1F2937;
+    --subtext:#6B7280;
+    --border:#E5E7EB;
+    --line-green:#06C755;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+    background:linear-gradient(160deg,#F4F6F7 0%,#E9EEF0 100%);
+    min-height:100vh;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    padding:32px 16px 60px;
+    color:var(--text);
+  }
+  .intro{
+    max-width:420px;
+    text-align:center;
+    margin-bottom:24px;
+  }
+  .intro h1{
+    font-size:20px;
+    margin:0 0 8px;
+    color:var(--text);
+  }
+  .intro p{
+    font-size:13px;
+    color:var(--subtext);
+    line-height:1.6;
+    margin:0;
+  }
+  .phone{
+    width:375px;
+    max-width:92vw;
+    background:#111827;
+    border-radius:44px;
+    padding:14px;
+    box-shadow:0 30px 60px -20px rgba(17,24,39,0.35), 0 0 0 1px rgba(17,24,39,0.05);
+    position:relative;
+  }
+  .notch{
+    position:absolute;
+    top:14px;
+    left:50%;
+    transform:translateX(-50%);
+    width:120px;
+    height:22px;
+    background:#111827;
+    border-radius:0 0 16px 16px;
+    z-index:5;
+  }
+  .screen{
+    background:var(--bg);
+    border-radius:32px;
+    overflow:hidden;
+    display:flex;
+    flex-direction:column;
+    height:730px;
+    position:relative;
+  }
+  .statusbar{
+    height:34px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding:0 24px;
+    font-size:12px;
+    font-weight:600;
+    color:var(--text);
+    background:var(--bg);
+    flex-shrink:0;
+  }
+  .statusbar .icons{display:flex;gap:4px;align-items:center;font-size:11px;}
+  .appbar{
+    padding:6px 20px 14px;
+    background:var(--bg);
+    flex-shrink:0;
+  }
+  .appbar h2{
+    margin:0;
+    font-size:19px;
+    font-weight:700;
+  }
+  .appbar p{
+    margin:2px 0 0;
+    font-size:12px;
+    color:var(--subtext);
+  }
+  .content{
+    flex:1;
+    overflow-y:auto;
+    padding:0 16px 16px;
+    -webkit-overflow-scrolling:touch;
+  }
+  .content::-webkit-scrollbar{width:0;}
+  .tabbar{
+    height:64px;
+    background:var(--card);
+    border-top:1px solid var(--border);
+    display:flex;
+    align-items:center;
+    justify-content:space-around;
+    flex-shrink:0;
+    padding-bottom:4px;
+  }
+  .tab{
+    background:none;
+    border:none;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:3px;
+    font-size:10px;
+    color:var(--subtext);
+    cursor:pointer;
+    font-family:inherit;
+    padding:4px 10px;
+  }
+  .tab.active{color:var(--primary);}
+  .tab svg{width:22px;height:22px;}
+
+  /* ---- Cards & common ---- */
+  .banner{
+    display:flex;
+    align-items:flex-start;
+    gap:10px;
+    background:var(--amber-light);
+    border:1px solid #F6D9B6;
+    color:#8A5A22;
+    padding:12px 14px;
+    border-radius:14px;
+    font-size:12.5px;
+    line-height:1.6;
+    margin-bottom:14px;
+  }
+  .banner.info{background:var(--primary-light);border-color:#BFE6D7;color:var(--primary-dark);}
+  .card{
+    background:var(--card);
+    border-radius:16px;
+    padding:14px;
+    margin-bottom:12px;
+    box-shadow:0 1px 2px rgba(17,24,39,0.04);
+    border:1px solid var(--border);
+  }
+  .item-card{display:flex;gap:12px;flex-wrap:wrap;}
+  .item-icon{
+    width:44px;height:44px;border-radius:12px;
+    background:var(--primary-light);
+    display:flex;align-items:center;justify-content:center;
+    font-size:22px;flex-shrink:0;
+  }
+  .item-main{flex:1;min-width:0;}
+  .item-top{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;}
+  .item-name{font-size:14.5px;font-weight:700;color:var(--text);}
+  .item-tag{
+    display:inline-block;font-size:10px;color:var(--subtext);
+    background:#F3F4F6;padding:2px 7px;border-radius:6px;margin-top:3px;
+  }
+  .item-days{font-size:12.5px;font-weight:700;white-space:nowrap;}
+  .item-days.urgent{color:var(--red);}
+  .item-days.soon{color:var(--amber);}
+  .item-days.normal{color:var(--primary);}
+  .item-days.muted{color:var(--subtext);}
+  .progress-track{
+    height:6px;background:#EEF1F2;border-radius:4px;margin-top:10px;overflow:hidden;
+  }
+  .progress-fill{height:100%;border-radius:4px;}
+  .progress-fill.urgent{background:var(--red);}
+  .progress-fill.soon{background:var(--amber);}
+  .progress-fill.normal{background:var(--primary);}
+  .progress-fill.muted{background:var(--subtext);}
+  .item-sub{font-size:11px;color:var(--subtext);margin-top:6px;}
+
+  .greeting{font-size:15px;font-weight:700;margin:6px 0 12px;}
+
+  /* ---- toggles ---- */
+  .item-toggles{display:flex;gap:18px;margin-top:10px;padding-top:10px;border-top:1px solid #F1F3F4;width:100%;}
+  .toggle-row{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--subtext);font-weight:600;}
+  .switch{width:32px;height:18px;border-radius:999px;background:#E2E5E7;position:relative;display:inline-block;cursor:pointer;transition:background 0.2s;flex-shrink:0;}
+  .switch.on{background:var(--primary);}
+  .switch .knob{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;transition:transform 0.2s;box-shadow:0 1px 2px rgba(0,0,0,0.2);}
+  .switch.on .knob{transform:translateX(14px);}
+
+  .untracked-row{display:flex;align-items:center;gap:10px;padding:8px 4px;}
+  .untracked-row .item-icon{width:34px;height:34px;font-size:16px;opacity:0.65;}
+  .untracked-row .item-name{font-size:13px;font-weight:600;color:var(--subtext);}
+  .track-btn{
+    margin-left:auto;background:var(--primary-light);color:var(--primary-dark);border:none;
+    border-radius:8px;padding:6px 12px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;
+  }
+
+  /* ---- Buttons ---- */
+  .btn{
+    display:flex;align-items:center;justify-content:center;gap:8px;
+    width:100%;padding:14px;border-radius:14px;border:none;
+    font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;
+  }
+  .btn-primary{background:var(--primary);color:#fff;}
+  .btn-outline{background:#fff;border:1.5px solid var(--border);color:var(--text);}
+  .btn-secondary{background:var(--primary-light);color:var(--primary-dark);}
+  .link-btn{
+    background:none;border:none;color:var(--primary-dark);font-size:12.5px;
+    font-weight:600;cursor:pointer;padding:6px 0;font-family:inherit;text-decoration:underline;
+  }
+  .choice-btn{
+    display:flex;align-items:center;gap:12px;width:100%;
+    background:#fff;border:1.5px solid var(--border);border-radius:16px;
+    padding:16px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;
+    color:var(--text);margin-bottom:12px;
+  }
+  .choice-btn .ic{
+    width:40px;height:40px;border-radius:10px;background:var(--primary-light);
+    display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;
+  }
+  .choice-btn span.sub{display:block;font-size:11px;font-weight:400;color:var(--subtext);margin-top:2px;}
+
+  /* ---- Form ---- */
+  .field{margin-bottom:12px;}
+  .field label{display:block;font-size:11.5px;color:var(--subtext);margin-bottom:4px;font-weight:600;}
+  .field input[type=text], .field input[type=number], .field input[type=date], .field select{
+    width:100%;padding:10px 12px;border:1.5px solid var(--border);border-radius:10px;
+    font-size:13.5px;font-family:inherit;background:#fff;color:var(--text);
+  }
+  .row-item{
+    background:#fff;border:1px solid var(--border);border-radius:14px;padding:10px;margin-bottom:10px;
+  }
+  .row-item-top{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
+  .row-item-top input[type=checkbox]{width:17px;height:17px;accent-color:var(--primary);flex-shrink:0;}
+  .row-item-top input[type=text]{flex:1;border:none;border-bottom:1.5px solid var(--border);border-radius:0;padding:4px 2px;font-weight:700;font-size:13.5px;}
+  .row-item-grid{display:grid;grid-template-columns:1fr 70px 30px;gap:8px;align-items:center;padding-left:25px;}
+  .row-item-grid select, .row-item-grid input{padding:7px 8px;font-size:12px;border:1px solid var(--border);border-radius:8px;}
+  .del-btn{background:#F3F4F6;border:none;border-radius:8px;width:30px;height:30px;color:var(--subtext);font-size:14px;cursor:pointer;}
+
+  .loading-wrap{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:80px 20px;text-align:center;}
+  .spinner{
+    width:40px;height:40px;border-radius:50%;
+    border:4px solid var(--primary-light);border-top-color:var(--primary);
+    animation:spin 0.8s linear infinite;margin-bottom:18px;
+  }
+  @keyframes spin{to{transform:rotate(360deg);}}
+  .loading-wrap p{font-size:13px;color:var(--subtext);margin:2px 0;}
+
+  /* ---- LINE mock ---- */
+  .line-note{font-size:12px;color:var(--subtext);line-height:1.6;margin:10px 0 14px;}
+  .line-header{
+    display:flex;align-items:center;gap:10px;background:var(--line-green);
+    color:#fff;padding:10px 14px;border-radius:14px 14px 0 0;margin-top:4px;
+  }
+  .line-header .avatar{width:30px;height:30px;border-radius:8px;background:rgba(255,255,255,0.25);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;}
+  .line-header .names{line-height:1.3;}
+  .line-header .names b{font-size:13px;display:block;}
+  .line-header .names span{font-size:10px;opacity:0.85;}
+  .line-chat{background:#DFE7ED;padding:16px 12px;border-radius:0 0 14px 14px;}
+  .flex-bubble{
+    background:#fff;border-radius:14px;padding:14px;max-width:88%;
+    box-shadow:0 1px 3px rgba(0,0,0,0.08);
+  }
+  .flex-bubble .ftitle{font-size:13.5px;font-weight:800;margin-bottom:8px;}
+  .flex-item{display:flex;align-items:center;gap:8px;font-size:12.5px;padding:6px 0;border-top:1px solid #F1F3F4;}
+  .flex-item:first-of-type{border-top:none;}
+  .flex-btn{
+    margin-top:12px;width:100%;background:var(--line-green);color:#fff;border:none;
+    border-radius:10px;padding:10px;font-size:12.5px;font-weight:700;font-family:inherit;
+  }
+  .line-time{font-size:10px;color:var(--subtext);margin-top:5px;padding-left:2px;}
+  .muted-note{font-size:11px;color:var(--subtext);margin-top:10px;line-height:1.6;}
+
+  /* ---- Family ---- */
+  .member{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);}
+  .member:last-child{border-bottom:none;}
+  .avatar-circle{
+    width:38px;height:38px;border-radius:50%;background:var(--primary);color:#fff;
+    display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;flex-shrink:0;
+  }
+  .member-name{font-size:13.5px;font-weight:700;}
+  .member-role{font-size:11px;color:var(--subtext);}
+  .section-title{font-size:12.5px;font-weight:800;color:var(--subtext);margin:18px 0 8px;text-transform:uppercase;letter-spacing:0.03em;}
+  .section-hint{font-size:11.5px;color:var(--subtext);margin:-4px 0 8px;line-height:1.5;}
+  .radio-row{display:flex;align-items:center;gap:8px;padding:9px 0;font-size:13px;}
+  .radio-row input{accent-color:var(--primary);width:16px;height:16px;}
+
+  .toast{
+    position:absolute;left:16px;right:16px;bottom:78px;
+    background:#1F2937;color:#fff;padding:12px 16px;border-radius:12px;
+    font-size:12.5px;text-align:center;box-shadow:0 8px 20px rgba(0,0,0,0.25);
+    opacity:0;transform:translateY(8px);transition:all 0.25s ease;pointer-events:none;z-index:20;
+  }
+  .toast.show{opacity:1;transform:translateY(0);}
+
+  @media(max-width:420px){
+    .phone{width:92vw;}
+    .screen{height:78vh;}
+  }
+</style>
+</head>
+<body>
+
+<div class="intro">
+  <h1>StockCycle — UI Prototype</h1>
+  <p>Tap the tabs at the bottom to walk through the screens. All data shown is placeholder — nothing is actually saved or sent.</p>
+</div>
+
+<div class="phone">
+  <div class="notch"></div>
+  <div class="screen">
+    <div class="statusbar">
+      <span>9:41</span>
+      <span class="icons">●●● 📶 🔋</span>
+    </div>
+    <div class="appbar" id="appbar"></div>
+    <div class="content" id="content"></div>
+    <div class="toast" id="toast"></div>
+    <div class="tabbar">
+      <button class="tab" data-tab="home" onclick="setTab('home')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg>
+        Home
+      </button>
+      <button class="tab" data-tab="add" onclick="setTab('add')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>
+        Add
+      </button>
+      <button class="tab" data-tab="notify" onclick="setTab('notify')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 8a6 6 0 0112 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 20a2 2 0 004 0"/></svg>
+        Alerts
+      </button>
+      <button class="tab" data-tab="family" onclick="setTab('family')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M2 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><path d="M15 14.5c2.5.3 4 2.2 4 5.5"/></svg>
+        Family
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+const items = [
+  {name:'Toilet Paper', emoji:'🧻', category:'Household', days:2, progress:0.92, avgCycle:18, lastBought:'Aug 3', tracked:true, alertsOn:true},
+  {name:'Dish Soap', emoji:'🧴', category:'Household', days:5, progress:0.68, avgCycle:25, lastBought:'Jul 29', tracked:true, alertsOn:true},
+  {name:'Shampoo', emoji:'🧴', category:'Household', days:9, progress:0.45, avgCycle:35, lastBought:'Jul 20', tracked:true, alertsOn:false},
+  {name:'Trash Bags (45L)', emoji:'🗑️', category:'Household', days:16, progress:0.22, avgCycle:40, lastBought:'Jul 10', tracked:true, alertsOn:true},
+  {name:'Hand Soap', emoji:'🧼', category:'Household', days:11, progress:0.30, avgCycle:30, lastBought:'Jul 25', tracked:false, alertsOn:true},
+];
+
+let state = {
+  tab: 'home',
+  addStep: 'choose', // choose | loading | confirm | manual
+  confirmRows: [
+    {checked:true, name:'Toilet Paper, 12 rolls', category:'Household', qty:1},
+    {checked:true, name:'Dish Soap Refill', category:'Household', qty:1},
+    {checked:false, name:'Bananas', category:'Food', qty:1},
+  ],
+};
+
+function statusClass(days){
+  if(days<=3) return 'urgent';
+  if(days<=7) return 'soon';
+  return 'normal';
+}
+
+function setTab(tab){
+  state.tab = tab;
+  if(tab==='add') state.addStep = 'choose';
+  render();
+}
+
+function showToast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'), 2200);
+}
+
+function startUpload(){
+  state.addStep = 'loading';
+  render();
+  setTimeout(()=>{
+    state.addStep = 'confirm';
+    render();
+  }, 1300);
+}
+
+function goManual(){ state.addStep = 'manual'; render(); }
+function backChoose(){ state.addStep = 'choose'; render(); }
+
+function toggleRow(i){ state.confirmRows[i].checked = !state.confirmRows[i].checked; render(); }
+function updateRowName(i,val){ state.confirmRows[i].name = val; }
+function updateRowCat(i,val){ state.confirmRows[i].category = val; }
+function updateRowQty(i,val){ state.confirmRows[i].qty = val; }
+function removeRow(i){ state.confirmRows.splice(i,1); render(); }
+function addRow(){
+  state.confirmRows.push({checked:true, name:'', category:'Household', qty:1});
+  render();
+}
+
+function saveConfirm(){
+  showToast('Saved! This will be used to refine your restock predictions 🎉');
+  setTimeout(()=>{ state.tab='home'; render(); }, 900);
+}
+function saveManual(){
+  showToast('Added manually 👍');
+  setTimeout(()=>{ state.tab='home'; render(); }, 900);
+}
+
+function toggleTrack(i){
+  items[i].tracked = !items[i].tracked;
+  render();
+}
+function toggleAlert(i){
+  items[i].alertsOn = !items[i].alertsOn;
+  render();
+}
+
+function renderSwitch(on, i, kind){
+  return `<span class="switch ${on?'on':''}" onclick="${kind==='track'?'toggleTrack':'toggleAlert'}(${i})"><span class="knob"></span></span>`;
+}
+
+function renderHome(){
+  const trackedIdx = items.map((it,i)=>i).filter(i=>items[i].tracked)
+    .sort((a,b)=>items[a].days-items[b].days);
+  const untrackedIdx = items.map((it,i)=>i).filter(i=>!items[i].tracked);
+
+  const urgentCount = trackedIdx.filter(i=>items[i].days<=3 && items[i].alertsOn).length;
+
+  let html = `<div class="greeting">Hi there 👋</div>`;
+  if(urgentCount>0){
+    html += `<div class="banner">⚠️ <b>${urgentCount} item${urgentCount>1?'s':''}</b> running low soon. Worth picking up on your next shopping trip.</div>`;
+  }
+
+  trackedIdx.forEach(i=>{
+    const it = items[i];
+    const cls = it.alertsOn ? statusClass(it.days) : 'muted';
+    const daysLabel = it.alertsOn ? `${it.days}d left` : `🔕 ${it.days}d left`;
+    html += `
+    <div class="card item-card">
+      <div class="item-icon">${it.emoji}</div>
+      <div class="item-main">
+        <div class="item-top">
+          <div>
+            <div class="item-name">${it.name}</div>
+            <span class="item-tag">${it.category}</span>
+          </div>
+          <div class="item-days ${cls}">${daysLabel}</div>
+        </div>
+        <div class="progress-track"><div class="progress-fill ${cls}" style="width:${Math.round(it.progress*100)}%"></div></div>
+        <div class="item-sub">Last bought ${it.lastBought} · avg. cycle ${it.avgCycle} days</div>
+      </div>
+      <div class="item-toggles">
+        <label class="toggle-row">${renderSwitch(it.tracked,i,'track')} Tracking</label>
+        <label class="toggle-row">${renderSwitch(it.alertsOn,i,'alert')} Alerts</label>
+      </div>
+    </div>`;
+  });
+
+  if(untrackedIdx.length){
+    html += `<div class="section-title">Not Tracked</div>`;
+    html += `<div class="card">`;
+    untrackedIdx.forEach(i=>{
+      const it = items[i];
+      html += `
+      <div class="untracked-row">
+        <div class="item-icon">${it.emoji}</div>
+        <div class="item-name">${it.name}</div>
+        <button class="track-btn" onclick="toggleTrack(${i})">Track</button>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+  return html;
+}
+
+function renderAdd(){
+  if(state.addStep==='choose'){
+    return `
+      <p style="font-size:12.5px;color:var(--subtext);margin:8px 0 16px;line-height:1.6;">Upload a receipt and we'll read the items automatically and update your stock levels.</p>
+      <button class="choice-btn" onclick="startUpload()">
+        <div class="ic">📷</div>
+        <div>Take a Photo<span class="sub">Snap a receipt right now</span></div>
+      </button>
+      <button class="choice-btn" onclick="startUpload()">
+        <div class="ic">🖼️</div>
+        <div>Choose from Gallery<span class="sub">Pick a saved photo</span></div>
+      </button>
+      <div style="text-align:center;margin-top:16px;">
+        <button class="link-btn" onclick="goManual()">No receipt? Add an item manually</button>
+      </div>`;
+  }
+  if(state.addStep==='loading'){
+    return `
+      <div class="loading-wrap">
+        <div class="spinner"></div>
+        <p><b>Scanning your receipt…</b></p>
+        <p>Reading item names, quantities, and the purchase date</p>
+      </div>`;
+  }
+  if(state.addStep==='confirm'){
+    let rows = state.confirmRows.map((r,i)=>`
+      <div class="row-item">
+        <div class="row-item-top">
+          <input type="checkbox" ${r.checked?'checked':''} onchange="toggleRow(${i})">
+          <input type="text" value="${r.name}" oninput="updateRowName(${i},this.value)">
+        </div>
+        <div class="row-item-grid">
+          <select onchange="updateRowCat(${i},this.value)">
+            ${['Household','Food','Other'].map(c=>`<option ${c===r.category?'selected':''}>${c}</option>`).join('')}
+          </select>
+          <input type="number" min="1" value="${r.qty}" oninput="updateRowQty(${i},this.value)">
+          <button class="del-btn" onclick="removeRow(${i})">✕</button>
+        </div>
+      </div>`).join('');
+    return `
+      <div class="banner info">🧾 We read a receipt from ShopRite, Aug 14, 2026. Please check the details below.</div>
+      ${rows}
+      <button class="link-btn" onclick="addRow()">＋ Add an item</button>
+      <div style="height:8px;"></div>
+      <button class="btn btn-primary" onclick="saveConfirm()">Save These Items</button>
+    `;
+  }
+  if(state.addStep==='manual'){
+    return `
+      <p style="font-size:12.5px;color:var(--subtext);margin:8px 0 16px;">No receipt? Add an item directly.</p>
+      <div class="field"><label>Item name</label><input type="text" placeholder="e.g. Tissues"></div>
+      <div class="field"><label>Category</label>
+        <select><option>Household</option><option>Food</option><option>Other</option></select>
+      </div>
+      <div class="field"><label>Purchase date</label><input type="date" value="2026-08-15"></div>
+      <button class="btn btn-primary" onclick="saveManual()">Add Item</button>
+      <div style="text-align:center;margin-top:10px;">
+        <button class="link-btn" onclick="backChoose()">Back</button>
+      </div>
+    `;
+  }
+}
+
+function renderNotify(){
+  const mutedNames = items.filter(it=>it.tracked && !it.alertsOn).map(it=>it.name);
+  const alertItems = items.filter(it=>it.tracked && it.alertsOn && it.days<=7);
+  let bubbleItems = alertItems.map(it=>`<div class="flex-item">${it.emoji} &nbsp;${it.name} (${it.days} days left)</div>`).join('');
+  return `
+    <p class="line-note">📱 This is what a LINE reminder looks like. It arrives <b>2–3 days before</b> the predicted restock date, for any tracked item with alerts turned on.</p>
+    <div class="line-header">
+      <div class="avatar">S</div>
+      <div class="names"><b>StockCycle</b><span>Official Account</span></div>
+    </div>
+    <div class="line-chat">
+      <div class="flex-bubble">
+        <div class="ftitle">🔔 Time to restock soon</div>
+        ${bubbleItems}
+        <button class="flex-btn">Open in App</button>
+      </div>
+      <div class="line-time">2:02 PM</div>
+    </div>
+    ${mutedNames.length ? `<p class="muted-note">🔕 Muted, won't trigger an alert: ${mutedNames.join(', ')}. Turn alerts back on for an item from the Home tab.</p>` : ''}
+  `;
+}
+
+function renderFamily(){
+  return `
+    <div class="section-title">Family Members</div>
+    <div class="card">
+      <div class="member">
+        <div class="avatar-circle">A</div>
+        <div><div class="member-name">Member A (Admin)</div><div class="member-role">Can add & edit</div></div>
+      </div>
+      <div class="member">
+        <div class="avatar-circle" style="background:#F2994A;">B</div>
+        <div><div class="member-name">Member B</div><div class="member-role">Can add & edit</div></div>
+      </div>
+      <div class="member">
+        <div class="avatar-circle" style="background:#5B8DEF;">C</div>
+        <div><div class="member-name">Member C</div><div class="member-role">Can add & edit</div></div>
+      </div>
+    </div>
+    <div class="section-title">Notification Timing</div>
+    <p class="section-hint">Applies to every tracked item with Alerts turned on. Mute individual items from the Home tab instead of changing this.</p>
+    <div class="card">
+      <label class="radio-row"><input type="radio" name="timing">1 day before</label>
+      <label class="radio-row"><input type="radio" name="timing" checked>2–3 days before</label>
+      <label class="radio-row"><input type="radio" name="timing">5 days before</label>
+    </div>
+    <div class="section-title">About Your Data</div>
+    <div class="card" style="font-size:12px;color:var(--subtext);line-height:1.7;">
+      Receipt photos are automatically deleted 30 days after processing. Only the item name, quantity, and purchase date are kept for predictions.
+    </div>
+  `;
+}
+
+const appbarTitles = {
+  home: {t:'StockCycle', s:'Sorted by soonest predicted restock date'},
+  add: {t:'Add a Receipt', s:''},
+  notify: {t:'Notification Preview', s:''},
+  family: {t:'Family & Settings', s:''},
+};
+
+function render(){
+  document.querySelectorAll('.tab').forEach(b=>{
+    b.classList.toggle('active', b.dataset.tab===state.tab);
+  });
+  const ab = appbarTitles[state.tab];
+  let abHtml = `<h2>${ab.t}</h2>`;
+  if(ab.s) abHtml += `<p>${ab.s}</p>`;
+  document.getElementById('appbar').innerHTML = abHtml;
+
+  let html = '';
+  if(state.tab==='home') html = renderHome();
+  else if(state.tab==='add') html = renderAdd();
+  else if(state.tab==='notify') html = renderNotify();
+  else if(state.tab==='family') html = renderFamily();
+  document.getElementById('content').innerHTML = html;
+}
+
+setTab('home');
+</script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+{
+  "name": "stock-cycle-app",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "packages/*",
+    "app",
+    "infra"
+  ],
+  "scripts": {
+    "build:core": "npm run build -w packages/core",
+    "test:core": "npm run test -w packages/core",
+    "dev:app": "npm run dev -w app",
+    "lint:app": "npm run lint -w app",
+    "build:app": "npm run build -w app",
+    "build:infra": "npm run build -w infra",
+    "synth:infra": "npm run synth -w infra"
+  }
+}
